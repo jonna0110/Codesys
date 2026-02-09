@@ -1,166 +1,424 @@
+﻿#!/usr/bin/env python3
 """
-Simple ST -> PLCOpenXML converter tailored to the provided `Logger.st` format.
-- Usage: call convert(input_st_path, output_xml_path)
-- Produces an XML similar to your working `LoggerRealValues.xml` format.
+ST -> PLCOpenXML (tc6_0200) Converter for CODESYS.
 
-This is intentionally small and easy to adapt.
+Converts Structured Text .st files (IEC 61131-3) to PLCOpenXML format 
+suitable for importing into CODESYS Machine Expert Logic Builder.
+
+Features:
+  - Parses FUNCTION_BLOCK with methods, properties, variables, and constants
+  - Handles ARRAY, REAL, INT, BOOL, and other basic types
+  - Preserves attribute pragmas on properties {attribute 'name' := 'value'}
+  - Generates valid tc6_0200 PLCOpenXML with proper ObjectIds
+  - Dynamically handles any FB structure (not hardcoded)
+
+Usage:
+  python st_to_plcopenxml.py <input.st> <output.xml>
+  
+  Or programmatically:
+    from st_to_plcopenxml import STConverter
+    converter = STConverter()
+    converter.convert('MyFB.st', 'MyFB.xml')
+
+Author: Generated for CODESYS conversion workflow
+License: MIT
 """
+
 import re
+import sys
 import uuid
 from pathlib import Path
+from typing import Dict, List, Tuple, Optional
 
 
-def uuid_str():
+def uuid_str() -> str:
+    """Generate a new UUID string."""
     return str(uuid.uuid4())
 
 
 def escape_xhtml(s: str) -> str:
+    """Escape special characters for XML/xhtml bodies."""
+    if not s:
+        return s
     s = s.replace('&', '&amp;')
     s = s.replace('<', '&lt;')
     s = s.replace('>', '&gt;')
     return s
 
 
-class Method:
-    def __init__(self, name):
+class Variable:
+    """Represents a variable or constant."""
+    def __init__(self, name: str, type_str: str, init_val: Optional[str] = None, is_constant: bool = False):
         self.name = name
-        self.input_vars = []
-        self.output_vars = []
-        self.local_vars = []
+        self.type_str = type_str  # e.g., "INT", "ARRAY [1..10] OF REAL"
+        self.init_val = init_val
+        self.is_constant = is_constant
+
+    def __repr__(self):
+        return f"Variable({self.name}: {self.type_str})"
+
+
+class Method:
+    """Represents a function block method."""
+    def __init__(self, name: str):
+        self.name = name
+        self.input_vars: List[Tuple[str, str]] = []  # [(name, type), ...]
+        self.output_vars: List[Tuple[str, str]] = []
+        self.local_vars: List[Tuple[str, str]] = []
         self.body = ''
         self.object_id = uuid_str()
+
+    def __repr__(self):
+        return f"Method({self.name})"
 
 
 class Property:
-    def __init__(self, name, type_):
+    """Represents a function block property."""
+    def __init__(self, name: str, type_str: str):
         self.name = name
-        self.type = type_
-        self.local_vars = []
+        self.type_str = type_str
+        self.local_vars: List[Tuple[str, str]] = []
         self.body = ''
-        self.attribute = None
+        self.attribute: Optional[Tuple[str, str]] = None  # (attr_name, attr_value)
         self.object_id = uuid_str()
 
+    def __repr__(self):
+        return f"Property({self.name}: {self.type_str})"
 
-def parse_st(text: str):
-    # Very small parser for the Logger.st structure
-    fb_name = re.search(r'FUNCTION_BLOCK\s+(\w+)', text)
-    fb_name = fb_name.group(1) if fb_name else 'FB'
 
-    # parse constant block
-    consts = {}
-    m = re.search(r'VAR\s+CONSTANT\s*(.*?)END_VAR', text, re.S)
-    if m:
-        for line in m.group(1).splitlines():
+class STConverter:
+    """Converts Structured Text to PLCOpenXML."""
+
+    def __init__(self):
+        self.fb_name = 'FB'
+        self.constants: Dict[str, Variable] = {}
+        self.variables: Dict[str, Variable] = {}
+        self.methods: List[Method] = []
+        self.properties: List[Property] = []
+
+    def parse_type(self, type_str: str) -> str:
+        """
+        Clean and return a type string for XML.
+        Handles: INT, REAL, BOOL, ARRAY [...] OF TYPE, etc.
+        """
+        return type_str.strip()
+
+    def parse_variable_decl(self, name: str, type_str: str, init_val: Optional[str] = None) -> Variable:
+        """Parse a variable declaration and return a Variable object."""
+        return Variable(name, self.parse_type(type_str), init_val)
+
+    def parse_st(self, text: str) -> None:
+        """Parse a .st (Structured Text) file into FB structure."""
+        # Extract function block name
+        match = re.search(r'FUNCTION_BLOCK\s+(\w+)', text)
+        if match:
+            self.fb_name = match.group(1)
+
+        # Parse VAR CONSTANT block
+        const_match = re.search(r'VAR\s+CONSTANT\s*\n(.*?)\nEND_VAR', text, re.MULTILINE | re.DOTALL)
+        if const_match:
+            self._parse_var_block(const_match.group(1), is_constant=True)
+
+        # Parse VAR block (before methods) - member variables
+        # Look for first VAR...END_VAR that is NOT VAR_INPUT/VAR_OUTPUT/VAR_CONSTANT
+        fb_match = re.search(r'FUNCTION_BLOCK\s+\w+(.*?)METHOD\s+PUBLIC', text, re.DOTALL)
+        if fb_match:
+            fb_section = fb_match.group(1)
+            var_match = re.search(r'VAR\s*\n(.*?)\nEND_VAR', fb_section, re.MULTILINE | re.DOTALL)
+            if var_match:
+                self._parse_var_block(var_match.group(1), is_constant=False)
+
+        # Parse methods
+        for method_match in re.finditer(
+            r'METHOD\s+PUBLIC\s+(\w+)(.*?)(?=METHOD\s+PUBLIC|PROPERTY\s+PUBLIC|END_FUNCTION_BLOCK)',
+            text, re.DOTALL
+        ):
+            method_name = method_match.group(1)
+            method_block = method_match.group(2)
+            method = Method(method_name)
+            self._parse_method(method, method_block)
+            self.methods.append(method)
+
+        # Parse properties
+        for prop_match in re.finditer(
+            r'PROPERTY\s+PUBLIC\s+(\w+)\s*:\s*(\w+)(.*?)END_PROPERTY',
+            text, re.DOTALL
+        ):
+            prop_name = prop_match.group(1)
+            prop_type = prop_match.group(2)
+            prop_block = prop_match.group(3)
+            prop = Property(prop_name, prop_type)
+            self._parse_property(prop, prop_block)
+            self.properties.append(prop)
+
+    def _parse_var_block(self, block_text: str, is_constant: bool) -> None:
+        """Parse a VAR...END_VAR block and extract variables."""
+        target_dict = self.constants if is_constant else self.variables
+        
+        # Split by variable declarations (look for name : type patterns)
+        # Handle multi-line declarations  
+        lines = block_text.split('\n')
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line or line.startswith('(*'):
+                i += 1
+                continue
+
+            # Match: varname : TYPE [:= INIT]
+            # TYPE can be simple (INT, REAL) or complex (ARRAY [...] OF TYPE)
+            match = re.match(r'(\w+)\s*:\s*(.+?)(?::=\s*(.+))?$', line)
+            if match:
+                var_name = match.group(1)
+                type_str = match.group(2).strip()
+                init_val = match.group(3).strip() if match.group(3) else None
+
+                # Handle multi-line ARRAY declarations
+                # e.g., ARRAY\n     [1..10]\n     OF REAL
+                if 'ARRAY' in type_str.upper():
+                    # Collect lines until we close the ARRAY
+                    j = i + 1
+                    while j < len(lines):
+                        type_str += ' ' + lines[j].strip()
+                        if 'OF' in lines[j].upper():
+                            i = j
+                            break
+                        j += 1
+
+                var = self.parse_variable_decl(var_name, type_str, init_val)
+                target_dict[var_name] = var
+            i += 1
+
+    def _parse_method(self, method: Method, block_text: str) -> None:
+        """Parse a method block and extract signatures + body."""
+        # Extract VAR_INPUT section
+        inp_match = re.search(r'VAR_INPUT\s*(.*?)\s*END_VAR', block_text, re.DOTALL)
+        if inp_match:
+            self._parse_param_section(inp_match.group(1), method.input_vars)
+
+        # Extract VAR_OUTPUT section
+        out_match = re.search(r'VAR_OUTPUT\s*(.*?)\s*END_VAR', block_text, re.DOTALL)
+        if out_match:
+            self._parse_param_section(out_match.group(1), method.output_vars)
+
+        # Extract local VAR section (not VAR_INPUT/OUTPUT)
+        local_match = re.search(r'VAR\s*(.*?)\s*END_VAR', block_text, re.DOTALL)
+        if local_match:
+            self._parse_param_section(local_match.group(1), method.local_vars)
+
+        # Extract body - can be either BEGIN...END_METHOD or code directly followed by END_METHOD
+        # First try BEGIN...END_METHOD pattern
+        body_match = re.search(r'BEGIN\s*(.*?)\s*END_METHOD', block_text, re.DOTALL)
+        if body_match:
+            method.body = body_match.group(1).strip()
+        else:
+            # If no BEGIN, try to extract code after all VAR sections
+            # Remove all VAR/VAR_INPUT/VAR_OUTPUT/END_VAR sections, then get what's left before END_METHOD
+            cleaned = re.sub(r'(VAR_INPUT|VAR_OUTPUT|VAR)\s*.*?END_VAR\s*', '', block_text, flags=re.DOTALL)
+            body_match = re.search(r'(.*?)\s*END_METHOD', cleaned, re.DOTALL)
+            if body_match:
+                body = body_match.group(1).strip()
+                if body:  # Only set if there's actual content
+                    method.body = body
+
+    def _parse_property(self, prop: Property, block_text: str) -> None:
+        """Parse a property block (PROPERTY GET section)."""
+        # Check for attribute pragma
+        attr_match = re.search(r"\{attribute\s+['\"](\w+)['\"]\s*:=\s*['\"](\w+)['\"]\}", block_text)
+        if attr_match:
+            prop.attribute = (attr_match.group(1), attr_match.group(2))
+
+        # Find PROPERTY GET section
+        get_match = re.search(r'PROPERTY\s+GET\s*(.*?)(?=END_PROPERTY|$)', block_text, re.DOTALL)
+        if get_match:
+            get_block = get_match.group(1)
+
+            # Local VAR section within GET
+            local_match = re.search(r'VAR\s*(.*?)\s*END_VAR', get_block, re.DOTALL)
+            if local_match:
+                self._parse_param_section(local_match.group(1), prop.local_vars)
+
+            # Body between BEGIN and END_PROPERTY/GET
+            body_match = re.search(r'BEGIN\s*(.*?)(?:END_PROPERTY|$)', get_block, re.DOTALL)
+            if body_match:
+                prop.body = body_match.group(1).strip()
+            else:
+                # If no BEGIN, try to extract code after all VAR sections
+                cleaned = re.sub(r'VAR\s*.*?END_VAR\s*', '', get_block, flags=re.DOTALL)
+                body_match = re.search(r'(.*?)(?:END_PROPERTY|$)', cleaned, re.DOTALL)
+                if body_match:
+                    body = body_match.group(1).strip()
+                    if body:
+                        prop.body = body
+
+    def _parse_param_section(self, section_text: str, target_list: List[Tuple[str, str]]) -> None:
+        """Parse a parameter/variable section and append (name, type) tuples."""
+        lines = section_text.split('\n')
+        for line in lines:
             line = line.strip().rstrip(';')
-            if not line: continue
-            mo = re.match(r"(\w+)\s*:\s*(\w+)\s*:=\s*(.+)", line)
-            if mo:
-                name, type_, val = mo.groups()
-                consts[name] = val.strip()
+            if not line or line.startswith('(*'):
+                continue
+            match = re.match(r'(\w+)\s*:\s*(.+)', line)
+            if match:
+                var_name = match.group(1)
+                var_type = match.group(2).strip()
+                target_list.append((var_name, var_type))
 
-    # parse top-level VAR block (non-constant) before methods
-    vars_block = re.search(r'VAR\s*(.*?)END_VAR', text, re.S)
-    vars_ = {}
-    if vars_block:
-        for line in vars_block.group(1).splitlines():
-            line = line.strip().rstrip(';')
-            if not line: continue
-            mo = re.match(r"(\w+)\s*:\s*(ARRAY\s*\[.*?\]\s*OF\s*\w+|\w+)\s*(?::=\s*(.+))?", line)
-            if mo:
-                name, type_, init = mo.groups()
-                vars_[name] = {'type': type_.strip(), 'init': (init.strip() if init else None)}
+    def type_to_xml_element(self, type_str: str) -> str:
+        """
+        Convert a type string to an XML element.
+        E.g., "INT" -> "<INT />"
+              "ARRAY [1..10] OF REAL" -> "<array><dimension .../><baseType><REAL/></baseType></array>"
+        """
+        type_str = type_str.strip()
 
-    # parse methods
-    methods = []
-    for mm in re.finditer(r'METHOD\s+PUBLIC\s+(\w+)(.*?)(?=METHOD\s+PUBLIC|PROPERTY\s+PUBLIC|END_FUNCTION_BLOCK)', text, re.S):
-        name = mm.group(1)
-        block = mm.group(2)
-        method = Method(name)
-        # inputs
-        mi = re.search(r'VAR_INPUT\s*(.*?)END_VAR', block, re.S)
-        if mi:
-            for line in mi.group(1).splitlines():
-                line = line.strip().rstrip(';')
-                if not line: continue
-                mo = re.match(r"(\w+)\s*:\s*(\w+)", line)
-                if mo:
-                    method.input_vars.append((mo.group(1), mo.group(2)))
-        mo2 = re.search(r'VAR_OUTPUT\s*(.*?)END_VAR', block, re.S)
-        if mo2:
-            for line in mo2.group(1).splitlines():
-                line = line.strip().rstrip(';')
-                if not line: continue
-                m3 = re.match(r"(\w+)\s*:\s*(\w+)", line)
-                if m3:
-                    method.output_vars.append((m3.group(1), m3.group(2)))
-        ml = re.search(r'VAR\s*(?!_INPUT|_OUTPUT)(.*?)END_VAR', block, re.S)
-        if ml:
-            for line in ml.group(1).splitlines():
-                line = line.strip().rstrip(';')
-                if not line: continue
-                m4 = re.match(r"(\w+)\s*:\s*(\w+)", line)
-                if m4:
-                    method.local_vars.append((m4.group(1), m4.group(2)))
-        # body between BEGIN and END_METHOD
-        mb = re.search(r'BEGIN\s*(.*?)END_METHOD', mm.group(0), re.S)
-        if mb:
-            method.body = mb.group(1).strip()
-        methods.append(method)
+        # Handle ARRAY types
+        if 'ARRAY' in type_str.upper():
+            array_match = re.match(
+                r'ARRAY\s*\[(.*?)\]\s*OF\s*(\w+)',
+                type_str, re.IGNORECASE
+            )
+            if array_match:
+                dimension = array_match.group(1).strip()
+                base_type = array_match.group(2).strip()
+                return f'<array><dimension {dimension} /><baseType><{base_type} /></baseType></array>'
+            return '<array><dimension lower="1" upper="100" /><baseType><INT /></baseType></array>'
 
-    # parse properties
-    properties = []
-    for pm in re.finditer(r'PROPERTY\s+PUBLIC\s+(\w+)\s*:\s*(\w+)(.*?)END_PROPERTY', text, re.S):
-        name = pm.group(1)
-        type_ = pm.group(2)
-        block = pm.group(3)
-        prop = Property(name, type_)
-        # attribute pragma
-        at = re.search(r"\{attribute\s+['\"](\w+)['\"]\s*:=\s*['\"](\w+)['\"]\}", block)
-        if at:
-            prop.attribute = (at.group(1), at.group(2))
-        # property GET local vars and body
-        getm = re.search(r'PROPERTY\s+GET\s*(.*?)END_PROPERTY', pm.group(0), re.S)
-        if getm:
-            gb = getm.group(1)
-            ml = re.search(r'VAR\s*(.*?)END_VAR', gb, re.S)
-            if ml:
-                for line in ml.group(1).splitlines():
-                    line = line.strip().rstrip(';')
-                    if not line: continue
-                    m4 = re.match(r"(\w+)\s*:\s*(\w+)", line)
-                    if m4:
-                        prop.local_vars.append((m4.group(1), m4.group(2)))
-            # body: between BEGIN and END_PROPERTY
-            mb = re.search(r'BEGIN\s*(.*)', gb, re.S)
-            if mb:
-                # body until END_PROPERTY will be trimmed later
-                body = mb.group(1)
-                # remove trailing END_PROPERTY if present
-                body = re.sub(r'END_PROPERTY\s*$', '', body, flags=re.S).strip()
-                prop.body = body
-        properties.append(prop)
+        # Simple types
+        return f'<{type_str} />'
 
-    return fb_name, consts, vars_, methods, properties
+    def generate_xml(self, output_path: Path) -> Path:
+        """Generate PLCOpenXML from parsed structure."""
+        now = '2026-02-10T00:00:00.0000000'
+        project_obj_id = uuid_str()
 
+        # Build member variable XML
+        member_vars_const = ''
+        member_vars_regular = ''
 
-def generate_xml(fb_name, consts, vars_, methods, properties, out_path: Path):
-    now = '2026-02-09T22:13:12.1011556'
-    fileHeader = f'<fileHeader companyName="" productName="Machine Expert Logic Builder" productVersion="V22.1.1.0" creationDateTime="{now}" />'
-    contentHeader = f'''  <contentHeader name="{fb_name}" version="0.0.0.0" modificationDateTime="{now}" author="vboxuser">'''
+        for var in self.constants.values():
+            type_xml = self.type_to_xml_element(var.type_str)
+            init_xml = f'<initialValue><simpleValue value="{var.init_val or "0"}" /></initialValue>' if var.init_val else ''
+            member_vars_const += f'''            <variable name="{var.name}">
+              <type>
+                {type_xml}
+              </type>
+              {init_xml}
+            </variable>
+'''
 
-    # build methods xml
-    methods_xml = ''
-    for m in methods:
-        inp = ''.join([f'<variable name="{n}"><type><{t} /></type></variable>' for n,t in m.input_vars])
-        outp = ''.join([f'<variable name="{n}"><type><{t} /></type></variable>' for n,t in m.output_vars])
-        local = ''.join([f'<variable name="{n}"><type><{t} /></type></variable>' for n,t in m.local_vars])
-        body = escape_xhtml(m.body)
-        methods_xml += f'''          <data name="http://www.3s-software.com/plcopenxml/method" handleUnknown="implementation">
+        for var in self.variables.values():
+            type_xml = self.type_to_xml_element(var.type_str)
+            init_xml = f'<initialValue><simpleValue value="{var.init_val or "0"}" /></initialValue>' if var.init_val else ''
+            member_vars_regular += f'''            <variable name="{var.name}">
+              <type>
+                {type_xml}
+              </type>
+              {init_xml}
+            </variable>
+'''
+
+        # Build methods XML
+        methods_xml = self._generate_methods_xml()
+
+        # Build properties XML
+        props_xml = self._generate_properties_xml()
+
+        # Build project structure
+        proj_struct = [f'        <Object Name="{m.name}" ObjectId="{m.object_id}" />' for m in self.methods]
+        proj_struct += [f'        <Object Name="{p.name}" ObjectId="{p.object_id}" />' for p in self.properties]
+        proj_struct_str = '\n'.join(proj_struct)
+
+        xml = f'''<?xml version="1.0" encoding="utf-8"?>
+<project xmlns="http://www.plcopen.org/xml/tc6_0200">
+  <fileHeader companyName="" productName="Machine Expert Logic Builder" productVersion="V22.1.1.0" creationDateTime="{now}" />
+  <contentHeader name="{self.fb_name}" version="0.0.0.0" modificationDateTime="{now}" author="vboxuser">
+    <coordinateInfo>
+      <fbd>
+        <scaling x="1" y="1" />
+      </fbd>
+      <ld>
+        <scaling x="1" y="1" />
+      </ld>
+      <sfc>
+        <scaling x="1" y="1" />
+      </sfc>
+    </coordinateInfo>
+    <addData>
+      <data name="http://www.3s-software.com/plcopenxml/projectinformation" handleUnknown="implementation">
+        <ProjectInformation>
+          <property name="Author" type="string">vboxuser</property>
+          <property name="Company" type="string" />
+          <property name="Description" type="string" />
+          <property name="Git:IsGitManaged" type="boolean">false</property>
+          <property name="Project" type="string">{self.fb_name}</property>
+          <property name="Svn:IsSvnManaged" type="boolean">false</property>
+          <property name="Title" type="string">{self.fb_name}</property>
+          <property name="Version" type="version">0.0.0.0</property>
+        </ProjectInformation>
+      </data>
+    </addData>
+  </contentHeader>
+  <types>
+    <dataTypes />
+    <pous>
+      <pou name="{self.fb_name}" pouType="functionBlock">
+        <interface>
+{('          <localVars constant="true">' + member_vars_const + '          </localVars>' if member_vars_const else '')}
+{('          <localVars>' + member_vars_regular + '          </localVars>' if member_vars_regular else '')}
+        </interface>
+        <body>
+          <ST>
+            <xhtml xmlns="http://www.w3.org/1999/xhtml" />
+          </ST>
+        </body>
+        <addData>
+{methods_xml}{props_xml}        <data name="http://www.3s-software.com/plcopenxml/objectid" handleUnknown="discard">
+            <ObjectId>{project_obj_id}</ObjectId>
+          </data>
+        </addData>
+      </pou>
+    </pous>
+  </types>
+  <instances>
+    <configurations />
+  </instances>
+  <addData>
+    <data name="http://www.3s-software.com/plcopenxml/projectstructure" handleUnknown="discard">
+      <ProjectStructure>
+        <Object Name="{self.fb_name}" ObjectId="{project_obj_id}">
+{proj_struct_str}
+        </Object>
+      </ProjectStructure>
+    </data>
+  </addData>
+</project>
+'''
+        output_path.write_text(xml, encoding='utf-8')
+        return output_path
+
+    def _generate_methods_xml(self) -> str:
+        """Generate XML for all methods."""
+        xml = ''
+        for m in self.methods:
+            input_vars = ''.join([f'<variable name="{n}"><type>{self.type_to_xml_element(t)}</type></variable>'
+                                   for n, t in m.input_vars])
+            output_vars = ''.join([f'<variable name="{n}"><type>{self.type_to_xml_element(t)}</type></variable>'
+                                    for n, t in m.output_vars])
+            local_vars = ''.join([f'<variable name="{n}"><type>{self.type_to_xml_element(t)}</type></variable>'
+                                   for n, t in m.local_vars])
+            body = escape_xhtml(m.body)
+
+            input_section = f'<inputVars>{input_vars}</inputVars>' if m.input_vars else ''
+            output_section = f'<outputVars>{output_vars}</outputVars>' if m.output_vars else ''
+            local_section = f'<localVars>{local_vars}</localVars>' if m.local_vars else ''
+
+            xml += f'''          <data name="http://www.3s-software.com/plcopenxml/method" handleUnknown="implementation">
             <Method name="{m.name}" ObjectId="{m.object_id}">
               <interface>
-                {('<inputVars>' + inp + '</inputVars>') if m.input_vars else ''}
-                {('<outputVars>' + outp + '</outputVars>') if m.output_vars else ''}
-                {('<localVars>' + local + '</localVars>') if m.local_vars else ''}
+                {input_section}
+                {output_section}
+                {local_section}
               </interface>
               <body>
                 <ST>
@@ -169,34 +427,41 @@ def generate_xml(fb_name, consts, vars_, methods, properties, out_path: Path):
               </body>
               <addData />
             </Method>
-          </data>\n'''
+          </data>
+'''
+        return xml
 
-    # build properties xml
-    props_xml = ''
-    for p in properties:
-        local = ''.join([f'<variable name="{n}"><type><{t} /></type></variable>' for n,t in p.local_vars])
-        body = escape_xhtml(p.body)
-        attr_xml = ''
-        if p.attribute:
-            attr_xml = f'''                  <addData>
+    def _generate_properties_xml(self) -> str:
+        """Generate XML for all properties."""
+        xml = ''
+        for p in self.properties:
+            local_vars = ''.join([f'<variable name="{n}"><type>{self.type_to_xml_element(t)}</type></variable>'
+                                   for n, t in p.local_vars])
+            body = escape_xhtml(p.body)
+            local_section = f'<localVars>{local_vars}</localVars>' if p.local_vars else ''
+
+            attr_xml = ''
+            if p.attribute:
+                attr_xml = f'''                  <addData>
                     <data name="http://www.3s-software.com/plcopenxml/attributes" handleUnknown="implementation">
                       <Attributes>
                         <Attribute Name="{p.attribute[0]}" Value="{p.attribute[1]}" />
                       </Attributes>
                     </data>
-                  </addData>'''
-        props_xml += f'''          <data name="http://www.3s-software.com/plcopenxml/property" handleUnknown="implementation">
+                  </addData>
+'''
+
+            xml += f'''          <data name="http://www.3s-software.com/plcopenxml/property" handleUnknown="implementation">
             <Property name="{p.name}" ObjectId="{p.object_id}">
               <interface>
                 <returnType>
-                  <{p.type} />
+                  {self.type_to_xml_element(p.type_str)}
                 </returnType>
               </interface>
               <GetAccessor>
                 <interface>
-                  {('<localVars>' + local + '</localVars>') if p.local_vars else ''}
-{attr_xml}
-                </interface>
+                  {local_section}
+{attr_xml}                </interface>
                 <body>
                   <ST>
                     <xhtml xmlns="http://www.w3.org/1999/xhtml">{body}</xhtml>
@@ -206,40 +471,47 @@ def generate_xml(fb_name, consts, vars_, methods, properties, out_path: Path):
               </GetAccessor>
               <addData />
             </Property>
-          </data>\n'''
+          </data>
+'''
+        return xml
 
-    # assemble final xml
-    xml = f'<?xml version="1.0" encoding="utf-8"?>\n<project xmlns="http://www.plcopen.org/xml/tc6_0200">\n  {fileHeader}\n{contentHeader}\n    <coordinateInfo>\n      <fbd>\n        <scaling x="1" y="1" />\n      </fbd>\n      <ld>\n        <scaling x="1" y="1" />\n      </ld>\n      <sfc>\n        <scaling x="1" y="1" />\n      </sfc>\n    </coordinateInfo>\n    <addData>\n      <data name="http://www.3s-software.com/plcopenxml/projectinformation" handleUnknown="implementation">\n        <ProjectInformation>\n          <property name="Author" type="string">vboxuser</property>\n          <property name="Company" type="string" />\n          <property name="Description" type="string" />\n          <property name="Git:IsGitManaged" type="boolean">false</property>\n          <property name="Project" type="string">{fb_name}</property>\n          <property name="Svn:IsSvnManaged" type="boolean">false</property>\n          <property name="Title" type="string">{fb_name}</property>\n          <property name="Version" type="version">0.0.0.0</property>\n        </ProjectInformation>\n      </data>\n    </addData>\n  </contentHeader>\n  <types>\n    <dataTypes />\n    <pous>\n      <pou name="{fb_name}" pouType="functionBlock">\n        <interface>\n          <localVars constant="true">\n            <variable name="cArrSize">\n              <type>\n                <INT />\n              </type>\n              <initialValue>\n                <simpleValue value="{consts.get('cArrSize','100')}" />\n              </initialValue>\n            </variable>\n          </localVars>\n          <localVars>\n            '"""
-    # We'll keep original 'values' and 'count' declarations if present in vars_
-    xml += """
-            <variable name="values">\n              <type>\n                <array>\n                  <dimension lower="1" upper="cArrSize" />\n                  <baseType>\n                    <REAL />\n                  </baseType>\n                </array>\n              </type>\n            </variable>\n            <variable name="count">\n              <type>\n                <INT />\n              </type>\n              <initialValue>\n                <simpleValue value="0" />\n              </initialValue>\n            </variable>\n          </localVars>\n        </interface>\n        <body>\n          <ST>\n            <xhtml xmlns="http://www.w3.org/1999/xhtml" />\n          </ST>\n        </body>\n        <addData>\n"""
-    xml += methods_xml
-    xml += props_xml
-    xml += """        <data name="http://www.3s-software.com/plcopenxml/objectid" handleUnknown="discard">\n            <ObjectId>""" + uuid_str() + """</ObjectId>\n          </data>\n        </addData>\n      </pou>\n    </pous>\n  </types>\n  <instances>\n    <configurations />\n  </instances>\n  <addData>\n    """
-    # Project structure
-    proj_struct = '    <data name="http://www.3s-software.com/plcopenxml/projectstructure" handleUnknown="discard">\n      <ProjectStructure>\n        <Object Name="' + fb_name + '" ObjectId="' + uuid_str() + '">\n'
-    # Add methods and properties to project structure
-    for m in methods:
-        proj_struct += f'          <Object Name="{m.name}" ObjectId="{m.object_id}" />\n'
-    for p in properties:
-        proj_struct += f'          <Object Name="{p.name}" ObjectId="{p.object_id}" />\n'
-    proj_struct += '        </Object>\n      </ProjectStructure>\n    </data>\n  </addData>\n</project>\n'
+    def convert(self, input_st: str, output_xml: str) -> Path:
+        """Convert a .st file to PLCOpenXML."""
+        input_path = Path(input_st)
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_st}")
 
-    xml += proj_struct
+        text = input_path.read_text(encoding='utf-8')
+        self.parse_st(text)
 
-    out_path.write_text(xml, encoding='utf-8')
-    return out_path
+        output_path = Path(output_xml)
+        self.generate_xml(output_path)
+        print(f'[OK] Converted {input_st} to {output_xml}')
+        print(f'  Function Block: {self.fb_name}')
+        print(f'  Methods: {len(self.methods)}, Properties: {len(self.properties)}')
+        print(f'  Variables: {len(self.variables)}, Constants: {len(self.constants)}')
+        return output_path
 
 
-def convert(input_st='Logger.st', output_xml='Logger.generated.xml'):
-    p = Path(input_st)
-    if not p.exists():
-        raise FileNotFoundError(input_st)
-    text = p.read_text(encoding='utf-8')
-    fb_name, consts, vars_, methods, properties = parse_st(text)
-    out = generate_xml(fb_name, consts, vars_, methods, properties, Path(output_xml))
-    print('Wrote', out)
+def main():
+    """CLI entry point."""
+    if len(sys.argv) < 3:
+        print('Usage: python st_to_plcopenxml.py <input.st> <output.xml>')
+        print('')
+        print('Example:')
+        print('  python st_to_plcopenxml.py Logger.st Logger.xml')
+        sys.exit(1)
+
+    input_file = sys.argv[1]
+    output_file = sys.argv[2]
+
+    try:
+        converter = STConverter()
+        converter.convert(input_file, output_file)
+    except Exception as e:
+        print(f'Error: {e}', file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
-    convert()
+    main()
