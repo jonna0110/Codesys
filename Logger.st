@@ -11,10 +11,13 @@ FUNCTION_BLOCK LoggerRealValues
         VAR_INPUT
             value : REAL;
         END_VAR
+        VAR
+            i   : INT;
+        END_VAR
         BEGIN
             IF THIS^.count < THIS^.cArrSize THEN
                 THIS^.count := THIS^.count + 1;
-                values[count] := value;
+                THIS^.values[THIS^.count] := value;
 
             ELSE
                 (*Handle overflow, move array up 1 step and add new value as the newest value *)
@@ -67,13 +70,13 @@ FUNCTION_BLOCK LoggerRealValues
             END_IF
             
             (* Copy values to sorted array *)
-            FOR i := 1 TO count DO
-                sorted[i] := values[i];
+            FOR i := 1 TO THIS^.count DO
+                sorted[i] := THIS^.values[i];
             END_FOR
             
             (* Bubble sort *)
-            FOR i := 1 TO count - 1 DO
-                FOR j := 1 TO count - i DO
+            FOR i := 1 TO THIS^.count - 1 DO
+                FOR j := 1 TO THIS^.count - i DO
                     IF sorted[j] > sorted[j + 1] THEN
                         temp := sorted[j];
                         sorted[j] := sorted[j + 1];
@@ -93,6 +96,9 @@ FUNCTION_BLOCK LoggerRealValues
 
 
     METHOD PUBLIC ClearArray
+    VAR
+        i : INT;
+    END_VAR
         THIS^.count := 0;
         FOR i := 1 TO THIS^.cArrSize DO
             values[i] := 0.0;
