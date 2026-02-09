@@ -1,10 +1,10 @@
 FUNCTION_BLOCK LoggerRealValues
+    VAR CONSTANT
+        cArrSize : INT := 100;
+    END_VAR
     VAR
         values : ARRAY [1..cArrSize] OF REAL;
         count : INT := 0;
-    END_VAR
-    VAR_CONSTANT
-        cArrSize : INT := 100;
     END_VAR
 
     METHOD PUBLIC AddValue

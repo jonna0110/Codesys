@@ -1,0 +1,429 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<project xmlns="http://www.plcopen.org/xml/tc6_0200">
+  <fileHeader companyName="" productName="Machine Expert Logic Builder" productVersion="V22.1.1.0" creationDateTime="2026-02-09T22:21:55.2904742" />
+  <contentHeader name="Untitled2" version="0.0.0.0" modificationDateTime="2026-02-09T22:21:46.4491993" author="vboxuser">
+    <coordinateInfo>
+      <fbd>
+        <scaling x="1" y="1" />
+      </fbd>
+      <ld>
+        <scaling x="1" y="1" />
+      </ld>
+      <sfc>
+        <scaling x="1" y="1" />
+      </sfc>
+    </coordinateInfo>
+    <addData>
+      <data name="http://www.3s-software.com/plcopenxml/projectinformation" handleUnknown="implementation">
+        <ProjectInformation>
+          <property name="Author" type="string">vboxuser</property>
+          <property name="Company" type="string" />
+          <property name="Description" type="string" />
+          <property name="Git:IsGitManaged" type="boolean">false</property>
+          <property name="Project" type="string">Claude_Parser</property>
+          <property name="Svn:IsSvnManaged" type="boolean">false</property>
+          <property name="Title" type="string">Untitled2</property>
+          <property name="Version" type="version">0.0.0.0</property>
+        </ProjectInformation>
+      </data>
+    </addData>
+  </contentHeader>
+  <types>
+    <dataTypes />
+    <pous>
+      <pou name="LoggerRealValues" pouType="functionBlock">
+        <interface>
+          <localVars constant="true">
+            <variable name="cArrSize">
+              <type>
+                <INT />
+              </type>
+              <initialValue>
+                <simpleValue value="100" />
+              </initialValue>
+            </variable>
+          </localVars>
+          <localVars>
+            <variable name="values">
+              <type>
+                <array>
+                  <dimension lower="1" upper="cArrSize" />
+                  <baseType>
+                    <REAL />
+                  </baseType>
+                </array>
+              </type>
+            </variable>
+            <variable name="count">
+              <type>
+                <INT />
+              </type>
+              <initialValue>
+                <simpleValue value="0" />
+              </initialValue>
+            </variable>
+          </localVars>
+        </interface>
+        <body>
+          <ST>
+            <xhtml xmlns="http://www.w3.org/1999/xhtml" />
+          </ST>
+        </body>
+        <addData>
+          <data name="http://www.3s-software.com/plcopenxml/method" handleUnknown="implementation">
+            <Method name="AddValue" ObjectId="d8ad6fb1-59b1-4705-beb4-8bddc569fd6b">
+              <interface>
+                <inputVars>
+                  <variable name="value">
+                    <type>
+                      <REAL />
+                    </type>
+                  </variable>
+                </inputVars>
+                <localVars>
+                  <variable name="i">
+                    <type>
+                      <INT />
+                    </type>
+                  </variable>
+                </localVars>
+              </interface>
+              <body>
+                <ST>
+                  <xhtml xmlns="http://www.w3.org/1999/xhtml">IF THIS^.count &lt; THIS^.cArrSize THEN
+    THIS^.count := THIS^.count + 1;
+    THIS^.values[THIS^.count] := value;
+ELSE
+	(*Handle overflow, move array up 1 step and add new value as the newest value *)
+     FOR i := 1 TO THIS^.cArrSize - 1 DO
+         THIS^.values[i] := THIS^.values[i + 1];
+     END_FOR
+     
+     values[THIS^.cArrSize] := value;
+     THIS^.count := THIS^.cArrSize;
+END_IF</xhtml>
+                </ST>
+              </body>
+              <addData />
+            </Method>
+          </data>
+          <data name="http://www.3s-software.com/plcopenxml/method" handleUnknown="implementation">
+            <Method name="GetMean" ObjectId="826265f2-602d-4a36-a25a-13a53b94bd79">
+              <interface>
+                <outputVars>
+                  <variable name="mean">
+                    <type>
+                      <REAL />
+                    </type>
+                  </variable>
+                </outputVars>
+                <localVars>
+                  <variable name="i">
+                    <type>
+                      <INT />
+                    </type>
+                  </variable>
+                  <variable name="sum">
+                    <type>
+                      <REAL />
+                    </type>
+                    <initialValue>
+                      <simpleValue value="0.0" />
+                    </initialValue>
+                  </variable>
+                </localVars>
+              </interface>
+              <body>
+                <ST>
+                  <xhtml xmlns="http://www.w3.org/1999/xhtml">IF THIS^.count = 0 THEN
+    mean := 0.0;
+    RETURN;
+END_IF
+
+FOR i := 1 TO THIS^.count DO
+    sum := sum + THIS^.values[i];
+END_FOR
+
+mean := sum / THIS^.count;</xhtml>
+                </ST>
+              </body>
+              <addData />
+            </Method>
+          </data>
+          <data name="http://www.3s-software.com/plcopenxml/method" handleUnknown="implementation">
+            <Method name="GetMedian" ObjectId="65c782d6-266a-4b78-9543-0a73589cf74a">
+              <interface>
+                <outputVars>
+                  <variable name="median">
+                    <type>
+                      <REAL />
+                    </type>
+                  </variable>
+                </outputVars>
+                <localVars>
+                  <variable name="i">
+                    <type>
+                      <INT />
+                    </type>
+                  </variable>
+                  <variable name="j">
+                    <type>
+                      <INT />
+                    </type>
+                  </variable>
+                  <variable name="temp">
+                    <type>
+                      <REAL />
+                    </type>
+                  </variable>
+                  <variable name="sorted">
+                    <type>
+                      <array>
+                        <dimension lower="1" upper="cArrSize" />
+                        <baseType>
+                          <REAL />
+                        </baseType>
+                      </array>
+                    </type>
+                  </variable>
+                </localVars>
+              </interface>
+              <body>
+                <ST>
+                  <xhtml xmlns="http://www.w3.org/1999/xhtml">IF THIS^.count = 0 THEN
+    median := 0.0;
+    RETURN;
+END_IF
+
+FOR i := 1 TO THIS^.count DO
+    sorted[i] := THIS^.values[i];
+END_FOR
+
+FOR i := 1 TO THIS^.count - 1 DO
+    FOR j := 1 TO THIS^.count - i DO
+        IF sorted[j] &gt; sorted[j + 1] THEN
+            temp := sorted[j];
+            sorted[j] := sorted[j + 1];
+            sorted[j + 1] := temp;
+        END_IF
+    END_FOR
+END_FOR
+
+IF THIS^.count MOD 2 = 1 THEN
+    median := sorted[(THIS^.count + 1) / 2];
+ELSE
+    median := (sorted[THIS^.count / 2] + sorted[THIS^.count / 2 + 1]) / 2.0;
+END_IF</xhtml>
+                </ST>
+              </body>
+              <addData />
+            </Method>
+          </data>
+          <data name="http://www.3s-software.com/plcopenxml/method" handleUnknown="implementation">
+            <Method name="ClearArray" ObjectId="431e1ee3-c776-45ac-9ae2-165b0efc2f73">
+              <interface>
+                <localVars>
+                  <variable name="i">
+                    <type>
+                      <INT />
+                    </type>
+                  </variable>
+                </localVars>
+              </interface>
+              <body>
+                <ST>
+                  <xhtml xmlns="http://www.w3.org/1999/xhtml">THIS^.count := 0;
+FOR i := 1 TO THIS^.cArrSize DO
+    values[i] := 0.0;
+END_FOR</xhtml>
+                </ST>
+              </body>
+              <addData />
+            </Method>
+          </data>
+          <data name="http://www.3s-software.com/plcopenxml/method" handleUnknown="implementation">
+            <Method name="GetValue" ObjectId="de3b0c0c-fffe-4b42-9ec8-89b4240b75d1">
+              <interface>
+                <inputVars>
+                  <variable name="index">
+                    <type>
+                      <INT />
+                    </type>
+                  </variable>
+                </inputVars>
+                <outputVars>
+                  <variable name="value">
+                    <type>
+                      <REAL />
+                    </type>
+                  </variable>
+                </outputVars>
+              </interface>
+              <body>
+                <ST>
+                  <xhtml xmlns="http://www.w3.org/1999/xhtml">IF index &gt; 0 AND index &lt;= THIS^.count THEN
+    value := THIS^.values[index];
+ELSE
+    value := 0.0;
+END_IF</xhtml>
+                </ST>
+              </body>
+              <addData />
+            </Method>
+          </data>
+          <data name="http://www.3s-software.com/plcopenxml/property" handleUnknown="implementation">
+            <Property name="GetLowestValue" ObjectId="c7189875-858d-48f8-81a0-5c916f79298d">
+              <interface>
+                <returnType>
+                  <REAL />
+                </returnType>
+              </interface>
+              <GetAccessor>
+                <interface>
+                  <localVars>
+                    <variable name="i">
+                      <type>
+                        <INT />
+                      </type>
+                    </variable>
+                    <variable name="lowest">
+                      <type>
+                        <REAL />
+                      </type>
+                    </variable>
+                  </localVars>
+                  <addData>
+                    <data name="http://www.3s-software.com/plcopenxml/attributes" handleUnknown="implementation">
+                      <Attributes>
+                        <Attribute Name="monitoring" Value="call" />
+                      </Attributes>
+                    </data>
+                  </addData>
+                </interface>
+                <body>
+                  <ST>
+                    <xhtml xmlns="http://www.w3.org/1999/xhtml">IF THIS^.count = 0 THEN
+    GetLowestValue := 0.0;
+    RETURN;
+END_IF
+
+lowest := THIS^.values[1];
+FOR i := 2 TO THIS^.count DO
+    IF THIS^.values[i] &lt; lowest THEN
+        lowest := THIS^.values[i];
+    END_IF
+END_FOR
+
+GetLowestValue := lowest;</xhtml>
+                  </ST>
+                </body>
+                <addData />
+              </GetAccessor>
+              <addData />
+            </Property>
+          </data>
+          <data name="http://www.3s-software.com/plcopenxml/property" handleUnknown="implementation">
+            <Property name="GetHighestValue" ObjectId="ce52594e-a3e2-4abe-9c74-b63d8c26f8e6">
+              <interface>
+                <returnType>
+                  <REAL />
+                </returnType>
+              </interface>
+              <GetAccessor>
+                <interface>
+                  <localVars>
+                    <variable name="i">
+                      <type>
+                        <INT />
+                      </type>
+                    </variable>
+                    <variable name="highest">
+                      <type>
+                        <REAL />
+                      </type>
+                    </variable>
+                  </localVars>
+                  <addData>
+                    <data name="http://www.3s-software.com/plcopenxml/attributes" handleUnknown="implementation">
+                      <Attributes>
+                        <Attribute Name="monitoring" Value="call" />
+                      </Attributes>
+                    </data>
+                  </addData>
+                </interface>
+                <body>
+                  <ST>
+                    <xhtml xmlns="http://www.w3.org/1999/xhtml">IF THIS^.count = 0 THEN
+    GetHighestValue := 0.0;
+    RETURN;
+END_IF
+
+highest := THIS^.values[1];
+FOR i := 2 TO THIS^.count DO
+    IF THIS^.values[i] &gt; highest THEN
+        highest := THIS^.values[i];
+    END_IF
+END_FOR
+
+GetHighestValue := highest;</xhtml>
+                  </ST>
+                </body>
+                <addData />
+              </GetAccessor>
+              <addData />
+            </Property>
+          </data>
+          <data name="http://www.3s-software.com/plcopenxml/property" handleUnknown="implementation">
+            <Property name="GetCount" ObjectId="b51916b1-5ac4-4247-9f4e-a44393d68e1e">
+              <interface>
+                <returnType>
+                  <INT />
+                </returnType>
+              </interface>
+              <GetAccessor>
+                <interface>
+                  <addData>
+                    <data name="http://www.3s-software.com/plcopenxml/attributes" handleUnknown="implementation">
+                      <Attributes>
+                        <Attribute Name="monitoring" Value="call" />
+                      </Attributes>
+                    </data>
+                  </addData>
+                </interface>
+                <body>
+                  <ST>
+                    <xhtml xmlns="http://www.w3.org/1999/xhtml">GetCount := THIS^.count;</xhtml>
+                  </ST>
+                </body>
+                <addData />
+              </GetAccessor>
+              <addData />
+            </Property>
+          </data>
+          <data name="http://www.3s-software.com/plcopenxml/objectid" handleUnknown="discard">
+            <ObjectId>7074b990-a46d-422f-b072-c5279c055173</ObjectId>
+          </data>
+        </addData>
+      </pou>
+    </pous>
+  </types>
+  <instances>
+    <configurations />
+  </instances>
+  <addData>
+    <data name="http://www.3s-software.com/plcopenxml/projectstructure" handleUnknown="discard">
+      <ProjectStructure>
+        <Object Name="LoggerRealValues" ObjectId="7074b990-a46d-422f-b072-c5279c055173">
+          <Object Name="AddValue" ObjectId="d8ad6fb1-59b1-4705-beb4-8bddc569fd6b" />
+          <Object Name="GetMean" ObjectId="826265f2-602d-4a36-a25a-13a53b94bd79" />
+          <Object Name="GetMedian" ObjectId="65c782d6-266a-4b78-9543-0a73589cf74a" />
+          <Object Name="ClearArray" ObjectId="431e1ee3-c776-45ac-9ae2-165b0efc2f73" />
+          <Object Name="GetValue" ObjectId="de3b0c0c-fffe-4b42-9ec8-89b4240b75d1" />
+          <Object Name="GetLowestValue" ObjectId="c7189875-858d-48f8-81a0-5c916f79298d" />
+          <Object Name="GetHighestValue" ObjectId="ce52594e-a3e2-4abe-9c74-b63d8c26f8e6" />
+          <Object Name="GetCount" ObjectId="b51916b1-5ac4-4247-9f4e-a44393d68e1e" />
+        </Object>
+      </ProjectStructure>
+    </data>
+  </addData>
+</project>
